@@ -3,29 +3,29 @@ receiver/api.py — Alert Intake API (FastAPI, port 8502)
 
 Endpoints
 ---------
-POST /receive_alert   Accept an AnomalyAlert from the backend (port 8000)
-GET  /alerts          Return all stored alerts (newest first)
-GET  /alerts/stats    Severity counts
+POST /receive_alert   Accept alert JSON from backend, store in memory
+GET  /alerts          Return full alerts list (newest first), optional ?since=<ISO timestamp>
 GET  /health          Liveness probe
-DELETE /alerts        Clear all alerts (useful during demos)
+DELETE /alerts        Clear all alerts
 """
 from __future__ import annotations
 
 import logging
 from collections import deque
-from typing import List
+from datetime import datetime, timezone
+from typing import Any, List, Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(name)s | %(message)s")
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="Satellite Alert Receiver",
-    description="Ingests anomaly alerts from the backend and exposes them for the dashboard.",
-    version="1.0.0",
+    title="Satellite Alert Receiver API",
+    description="Ingests anomaly alerts from the backend and serves them to the dashboard.",
+    version="2.0.0",
 )
 
 app.add_middleware(
@@ -35,56 +35,62 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── In-memory store (resets on restart — intentional for demo) ────────────────
+# In-memory alert store (newest first)
 MAX_ALERTS = 500
-_alerts: deque = deque(maxlen=MAX_ALERTS)
+alerts: deque[dict[str, Any]] = deque(maxlen=MAX_ALERTS)
 
-
-# ── Schemas ───────────────────────────────────────────────────────────────────
 
 class AlertPayload(BaseModel):
-    satellite_id: str
-    timestamp: str
-    severity: str
-    status: str
-    anomalies: List[str]
-    raw_values: dict
-    explanation: str | None = None
+    satellite_id: Optional[str] = Field(default="satellite-sim-01")
+    timestamp: Optional[str] = None
+    severity: Optional[str] = Field(default="warning")
+    status: Optional[str] = Field(default="anomaly_detected")
+    anomalies: Optional[List[str]] = Field(default_factory=list)
+    flags: Optional[List[dict]] = Field(default_factory=list)
+    raw_values: Optional[dict] = Field(default_factory=dict)
+    explanation: Optional[str] = None
+    received_at: Optional[str] = None
 
-
-# ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/health", tags=["meta"])
 async def health():
-    return {"status": "ok", "service": "receiver-api", "alert_count": len(_alerts)}
+    return {"status": "ok", "service": "receiver-api", "alert_count": len(alerts)}
 
 
-@app.post("/receive_alert", status_code=202, tags=["alerts"])
-async def receive_alert(alert: AlertPayload):
-    _alerts.appendleft(alert.model_dump())
+@app.post("/receive_alert", tags=["alerts"])
+async def receive_alert(payload: dict[str, Any]):
+    """Accept alert JSON from backend, timestamp it, and store in-memory."""
+    received_time = datetime.now(timezone.utc).isoformat()
+    entry = dict(payload)
+    entry["received_at"] = received_time
+    if not entry.get("timestamp"):
+        entry["timestamp"] = received_time
+
+    alerts.appendleft(entry)
     logger.info(
-        "Alert received: satellite=%s  severity=%s  anomalies=%s",
-        alert.satellite_id,
-        alert.severity,
-        alert.anomalies,
+        "Alert received: satellite=%s severity=%s flags=%d",
+        entry.get("satellite_id", "unknown"),
+        entry.get("severity", "unknown"),
+        len(entry.get("flags", []) or entry.get("anomalies", [])),
     )
-    return {"accepted": True, "total_stored": len(_alerts)}
+    return {"status": "received", "total_alerts": len(alerts)}
 
 
-@app.get("/alerts", response_model=List[AlertPayload], tags=["alerts"])
-async def get_alerts(limit: int = 100):
-    return list(_alerts)[:limit]
+@app.get("/alerts", tags=["alerts"])
+async def get_alerts(since: Optional[str] = Query(None, description="ISO timestamp filter")):
+    """Return stored alerts (most recent first), optionally filtered by ?since=<timestamp>."""
+    if not since:
+        return list(alerts)
 
-
-@app.get("/alerts/stats", tags=["alerts"])
-async def alert_stats():
-    counts: dict[str, int] = {"normal": 0, "warning": 0, "critical": 0}
-    for a in _alerts:
-        counts[a.get("severity", "normal")] = counts.get(a.get("severity", "normal"), 0) + 1
-    return {"total": len(_alerts), "severity_counts": counts}
+    filtered = []
+    for a in alerts:
+        ts = a.get("received_at") or a.get("timestamp")
+        if ts and ts >= since:
+            filtered.append(a)
+    return filtered
 
 
 @app.delete("/alerts", tags=["alerts"])
 async def clear_alerts():
-    _alerts.clear()
-    return {"cleared": True}
+    alerts.clear()
+    return {"status": "cleared", "total_alerts": 0}
