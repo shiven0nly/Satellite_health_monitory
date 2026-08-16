@@ -1,0 +1,10 @@
+.env
+.env.local
+.env.*.local
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
