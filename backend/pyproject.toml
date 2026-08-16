@@ -1,0 +1,13 @@
+[project]
+name = "satellite-backend"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.141.1",
+    "groq>=1.6.0",
+    "httpx>=0.28.1",
+    "pydantic>=2.13.4",
+    "python-dotenv>=1.2.2",
+    "uvicorn[standard]>=0.52.3",
+]

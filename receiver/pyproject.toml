@@ -1,0 +1,13 @@
+[project]
+name = "satellite-receiver"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.141.1",
+    "pandas>=3.0.5",
+    "pydantic>=2.13.4",
+    "requests>=2.34.2",
+    "streamlit>=1.61.1",
+    "uvicorn[standard]>=0.52.3",
+]
