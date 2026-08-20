@@ -36,6 +36,29 @@ st.markdown(
     html, body, [class*="css"]  { font-family: 'Inter', sans-serif; }
 
     /* ── dark panel ── */
+    /* ── Health Bar ── */
+    .health-container {
+        background-color: #1f2937;
+        border: 1px solid #374151;
+        border-radius: 10px;
+        width: 100%;
+        height: 28px;
+        margin: 10px 0 20px 0;
+        overflow: hidden;
+        box-shadow: inset 0 2px 4px rgba(0,0,0,0.5);
+    }
+    .health-fill {
+        height: 100%;
+        transition: width 0.4s ease, background-color 0.4s ease;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        padding-right: 12px;
+        font-weight: 700;
+        font-size: 0.9rem;
+        color: rgba(255,255,255,0.95);
+        text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+    }
     .panel {
         background: linear-gradient(140deg,#0d1b2a 0%,#1a2744 100%);
         border: 1px solid #2d3f5e;
@@ -184,8 +207,39 @@ def _render_response(result: dict) -> None:
     explanation = result.get("explanation", "")
     delivery_ok = result.get("delivery_ok", True)
 
+    # Calculate a pseudo-health score based on the ML anomalies
+    health_score = 100
+    for f in flags:
+        if f.get("severity") == "critical":
+            health_score -= 40  # Massive drop for Autoencoder/Hard breaches
+        elif f.get("severity") == "warning":
+            health_score -= 20  # Moderate drop for RUL trend warnings
+            
+    # Floor the health at 5% so the bar remains visible
+    health_score = max(5, health_score)
+
+    # Determine health bar color dynamically
+    if health_score > 70:
+        bar_color = "#22c55e" # Green
+    elif health_score > 30:
+        bar_color = "#f59e0b" # Orange
+    else:
+        bar_color = "#ef4444" # Red
+
     st.markdown("---")
     st.markdown("#### 📟 Backend Response")
+
+    # Render the dynamic Health Bar
+    st.markdown(f"""
+        <div style="font-size: 0.85rem; font-weight: 600; color: #9ca3af; margin-bottom: -5px; text-transform: uppercase; letter-spacing: 0.05em;">
+            Overall System Health
+        </div>
+        <div class='health-container'>
+            <div class='health-fill' style='width: {health_score}%; background-color: {bar_color};'>
+                {health_score}%
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
 
     if not flags:
         st.markdown("<div class='flag-ok'>✅ All systems <b>NOMINAL</b> — no anomalies detected.</div>",
@@ -225,7 +279,6 @@ def _render_response(result: dict) -> None:
                 "⚠️ Anomaly detected locally — but **alert delivery to receiver failed**.  "
                 "Check that the receiver API is running on `:8502`."
             )
-
 
 # ── Sidebar: drift controls ───────────────────────────────────────────────────
 with st.sidebar:

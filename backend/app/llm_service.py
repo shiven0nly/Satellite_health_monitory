@@ -166,7 +166,7 @@ def explain_alert(flags: list[dict[str, Any]]) -> str:
     # ── Groq API call ─────────────────────────────────────────────────────
     try:
         response = client.chat.completions.create(
-            model="llama3-8b-8192",
+            model="openai/gpt-oss-20b",
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user",   "content": user_msg},
