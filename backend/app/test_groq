@@ -1,0 +1,28 @@
+import os
+from dotenv import load_dotenv
+from groq import Groq
+
+# Load the API key from your .env file
+load_dotenv()
+client = Groq()
+
+print("🔍 Fetching your allowed models...")
+models = client.models.list()
+active_models = [m.id for m in models.data]
+print(f"✅ Found {len(active_models)} available models.\n")
+
+print("🧪 Testing a standard chat model...")
+# Find a standard conversational model (Llama or Gemma)
+chat_models = [m for m in active_models if "llama" in m.lower() or "gemma" in m.lower()]
+test_model = chat_models[0] if chat_models else active_models[0]
+
+try:
+    response = client.chat.completions.create(
+        model=test_model,
+        messages=[{"role": "user", "content": "Respond with 'Connection successful!'"}]
+    )
+    print(f"✅ SUCCESS using model: {test_model}")
+    print(f"🤖 AI RESPONSE: {response.choices[0].message.content}")
+    print(f"\n👉 NEXT STEP: Copy '{test_model}' and paste it into your llm_service.py file!")
+except Exception as e:
+    print(f"❌ ERROR: {e}")

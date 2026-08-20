@@ -152,7 +152,7 @@ for k, v in _DEFAULTS.items():
 def post_telemetry(payload: dict) -> dict | None:
     """POST payload to backend.  Returns parsed JSON or None on error."""
     try:
-        r = requests.post(BACKEND_URL, json=payload, timeout=8)
+        r = requests.post(BACKEND_URL, json=payload, timeout=30)
         r.raise_for_status()
         return r.json()
     except requests.exceptions.ConnectionError:

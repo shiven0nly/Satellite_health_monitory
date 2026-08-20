@@ -1,185 +1,73 @@
-"""
-backend/app/llm_service.py — Groq-powered alert explanation
-============================================================
-
-Provides a single public function:
-
-    explain_alert(flags: list[dict]) -> str
-
-The function always returns a non-empty string.  If Groq is unavailable
-(missing key, network error, import failure) it falls back to a deterministic
-plain-text summary built directly from the flag data — so downstream callers
-never have to handle None or catch exceptions.
-
-The LLM layer is the ONLY place where any "AI" framing is used.
-The upstream anomaly detection (engine.py) is rule + trend logic only.
-"""
-
-from __future__ import annotations
-
-import logging
 import os
-from typing import Any
+import logging
+from typing import Any, Optional
+from dotenv import load_dotenv
+import google.generativeai as genai
 
 logger = logging.getLogger(__name__)
+load_dotenv()
 
-# ── Optional Groq import ──────────────────────────────────────────────────────
-try:
-    from groq import Groq  # type: ignore
-    _GROQ_AVAILABLE = True
-except ImportError:
-    _GROQ_AVAILABLE = False
-    logger.info("groq package not installed — LLM explanations will use built-in fallback.")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
-_client: "Groq | None" = None
-
-
-def _get_client() -> "Groq | None":
-    """Lazily initialise the Groq client; returns None if unavailable."""
-    global _client
-    if _client is not None:
-        return _client
-    if not _GROQ_AVAILABLE:
-        return None
-    api_key = os.getenv("GROQ_API_KEY", "").strip()
-    if not api_key:
-        logger.debug("GROQ_API_KEY not set — LLM explanation disabled.")
-        return None
-    _client = Groq(api_key=api_key)
-    return _client
-
-
-# ── System persona ────────────────────────────────────────────────────────────
+# ── Easy-to-understand Operator Persona ───────────────────────────────────────
+# ── Advanced Predictive Operator Persona ──────────────────────────────────────
 _SYSTEM_PROMPT = """\
-You are CASSANDRA — a satellite health monitoring assistant.
-Your job is to translate raw anomaly flag data into a concise operator brief.
+You are CASSANDRA, an advanced predictive AI monitoring satellite telemetry.
+Your goal is to provide a comprehensive, highly intelligent operator brief that highlights predictive ML insights and catches ALL concurrent anomalies.
 
 Rules:
-- Respond in exactly 3 sentences or fewer.
-- Sentence 1: state the most critical anomaly and its severity.
-- Sentence 2: state the likely cause category (power, thermal, navigation, attitude, or comms).
-- Sentence 3: recommend ONE immediate action the operator should take.
-- Use precise engineering language; do not be vague.
-- Do not say "I" or refer to yourself.
-- Do not mention Groq, LLMs, or AI.
+- Respond in exactly 3 powerful, professional sentences.
+- Sentence 1 (Diagnostics): Explicitly identify ALL sensor readings that are currently out of normal bounds (e.g., if both Temperature and Bus Current are high, you MUST state both) and provide their exact values.
+- Sentence 2 (Predictive Insight): Synthesize these raw readings with the ML anomaly flags (like the LSTM predictor) to explain the specific cascading hardware failure that will occur if the current degradation trend continues.
+- Sentence 3 (Mitigation Protocol): Recommend a precise, multi-step emergency action (e.g., shedding payload load AND adjusting attitude for thermal relief).
+- Tone: Maintain an authoritative, advanced aerospace engineering tone. Highlight the predictive nature of the alert without using opaque math jargon.
 """
 
-
-# ── Deterministic fallback ────────────────────────────────────────────────────
-
 def _template_explanation(flags: list[dict[str, Any]]) -> str:
-    """
-    Build a plain-English summary without Groq.
-
-    Called when the Groq client is unavailable or the API call fails.
-    Always returns a non-empty string.
-    """
     if not flags:
-        return "All subsystems nominal — no anomalies detected."
+        return "All satellite systems are operating within normal parameters."
+    first = flags[0]
+    return f"Warning: {first.get('channel', 'A subsystem')} is reporting irregular activity. Review telemetry and prepare mitigation procedures."
 
-    # Split into breach vs trend
-    breaches = [f for f in flags if f.get("type") == "threshold_breach"]
-    trends   = [f for f in flags if f.get("type") == "trending_toward_failure"]
-
-    parts: list[str] = []
-
-    if breaches:
-        worst = breaches[0]          # list is already ordered by engine output
-        parts.append(
-            f"CRITICAL — {worst['channel']} has breached its operational limit "
-            f"(value={worst['value']}, limit={worst['limit']})."
-        )
-        if len(breaches) > 1:
-            others = ", ".join(b["channel"] for b in breaches[1:])
-            parts.append(f"Additional breaches: {others}.")
-
-    if trends:
-        t = trends[0]
-        steps = t.get("projected_breach_in_steps", "?")
-        parts.append(
-            f"WARNING — {t['channel']} is trending toward its limit "
-            f"and may breach within ~{steps} telemetry steps."
-        )
-
-    parts.append("Recommend immediate review of affected subsystems and consider safe-mode activation.")
-    return " ".join(parts)
-
-
-# ── Public API ────────────────────────────────────────────────────────────────
-
-def explain_alert(flags: list[dict[str, Any]]) -> str:
-    """
-    Generate a human-readable explanation for a list of anomaly flags.
-
-    Parameters
-    ----------
-    flags : list[dict]
-        Engine flag dicts as returned by ``check_telemetry()``.
-        Each dict has at minimum: ``channel``, ``type``, ``value``, ``severity``.
-        Threshold breach adds ``limit``; trend adds ``projected_breach_in_steps``.
-
-    Returns
-    -------
-    str
-        Always a non-empty string.  Either a Groq-generated operator brief
-        or a deterministic template-based fallback — never raises, never
-        returns None or empty string.
-
-    Fallback chain
-    --------------
-    1. Groq API call succeeds → return LLM response.
-    2. Groq unavailable (no key / import error / network) → template fallback.
-    3. Groq call raises any exception → log warning + template fallback.
-    """
-    if not flags:
-        return "All subsystems nominal — no anomalies detected."
-
-    client = _get_client()
-    if client is None:
+def explain_alert(flags: list[dict[str, Any]], telemetry: Optional[dict[str, Any]] = None) -> str:
+    if not flags and not telemetry:
+        return "All systems nominal — no anomalies detected."
+    if not GEMINI_API_KEY:
         return _template_explanation(flags)
 
-    # ── Build the user message from structured flag data ──────────────────
-    flag_lines: list[str] = []
-    for f in flags:
-        if f.get("type") == "threshold_breach":
-            flag_lines.append(
-                f"  • {f['channel']}: THRESHOLD BREACH  "
-                f"value={f['value']}  limit={f['limit']}  severity={f['severity']}"
-            )
-        else:
-            steps = f.get("projected_breach_in_steps", "?")
-            flag_lines.append(
-                f"  • {f['channel']}: TRENDING TOWARD FAILURE  "
-                f"value={f['value']}  projected_breach_in={steps}_steps  severity={f['severity']}"
-            )
+    # Compile flag details
+    flag_details = [
+        f"- {f.get('channel')}: {f.get('type')} (Current: {f.get('value')}, Threshold: {f.get('limit', 'N/A')})"
+        for f in flags
+    ]
 
-    overall_severity = (
-        "CRITICAL" if any(f.get("severity") == "critical" for f in flags) else "WARNING"
-    )
+    # Include raw payload values (e.g. 130°C component temp, bus voltage)
+    telemetry_summary = ""
+    if telemetry:
+        telemetry_summary = "Current Sensor Readings:\n" + "\n".join([f"- {k}: {v}" for k, v in telemetry.items()])
 
-    user_msg = (
-        f"Overall severity: {overall_severity}\n"
-        f"Anomaly flags ({len(flags)} total):\n"
-        + "\n".join(flag_lines)
-    )
+    prompt = f"""
+{telemetry_summary}
 
-    # ── Groq API call ─────────────────────────────────────────────────────
+ML Anomaly & Trend Detections:
+{chr(10).join(flag_details) if flag_details else 'No explicit threshold breaches, but unusual trend pattern detected.'}
+
+Please provide an easy-to-understand 3-sentence operational brief:
+"""
+
     try:
-        response = client.chat.completions.create(
-            model="openai/gpt-oss-20b",
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user",   "content": user_msg},
-            ],
-            max_tokens=150,
-            temperature=0.25,
+        model = genai.GenerativeModel(
+            model_name="gemini-3.5-flash-lite",
+            system_instruction=_SYSTEM_PROMPT,
+            generation_config=genai.types.GenerationConfig(
+                temperature=0.2,
+                max_output_tokens=2500,
+            ),
         )
-        result = response.choices[0].message.content.strip()
-        if result:
-            return result
-        # Empty response — fall through to template
-        logger.warning("Groq returned empty content; using template fallback.")
+        response = model.generate_content(prompt)
+        return response.text.strip() if response and response.text else _template_explanation(flags)
     except Exception as exc:
-        logger.warning("Groq API call failed (%s); using template fallback.", exc)
-
-    return _template_explanation(flags)
+        logger.warning("Gemini API call failed (%s); using fallback.", exc)
+        return _template_explanation(flags)

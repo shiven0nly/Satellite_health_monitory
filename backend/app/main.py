@@ -204,8 +204,8 @@ def _handle_telemetry(reading: TelemetryReading) -> TelemetryResponse:
     structured_flags = [AnomalyFlag(**f) for f in raw_flags]
 
     # ── Step 2: LLM explanation ───────────────────────────────────────────
-    explanation = explain_alert(raw_flags)   # always returns str
-
+    # ── Updated line 207 ──────────────────────────────────────────
+    explanation = explain_alert(flags=raw_flags, telemetry=reading.model_dump())
     # ── Step 3: Forward to receiver (only when anomalous) ────────────────
     delivery_ok = True
     if raw_flags:
